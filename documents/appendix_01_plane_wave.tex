@@ -1,0 +1,139 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{siunitx}
+\usepackage{booktabs}
+\usepackage[hidelinks]{hyperref}
+\setlength{\parskip}{4pt}
+\newcommand{\vect}[1]{\mathbf{#1}}
+\newcommand{\uv}[1]{\hat{\mathbf{#1}}}
+
+\title{Appendix I: From a Plane Wave to the Steering Vector\\[4pt]\large why $a_n = e^{\,j\psi_n}$}
+\author{BLE AoA notes --- appendix to Step 3 (uncalibrated MUSIC)}
+\date{September 2026}
+
+\begin{document}
+\maketitle
+
+\noindent\emph{For readers who have not met wave propagation in vector form. Everything below is the definition of a travelling wave, followed by a dot product.}
+
+\section{A wave travelling along one axis}
+Start with a signal that oscillates at frequency $f$ and moves along the $z$ axis:
+\begin{equation}
+  s(z, t) = \cos\!\left(2\pi f t - k z\right), \qquad k = \frac{2\pi}{\lambda}.
+  \label{eq:1d}
+\end{equation}
+$k$ is the \emph{wavenumber}: how much the phase changes per metre of distance, just as $2\pi f$ is how much it changes per second of time.
+
+Why does (\ref{eq:1d}) travel toward $+z$? Follow one crest. A crest is a point where the argument of the cosine is constant, say zero:
+\[
+  2\pi f t - k z = 0 \quad\Longrightarrow\quad z = \frac{2\pi f}{k}\, t = f\lambda\, t = c\, t .
+\]
+As $t$ increases, the crest's position $z$ increases: the wave moves toward $+z$ at speed $c = f\lambda$. With a $+kz$ sign instead, the crest would satisfy $z = -ct$ and move toward $-z$. So
+
+\begin{center}
+\fbox{\parbox{0.8\textwidth}{\centering a \emph{minus} sign in front of the spatial term means propagation in the \emph{positive} direction of that coordinate.}}
+\end{center}
+
+A second reading of (\ref{eq:1d}) is more useful for arrays. Freeze time at $t = 0$ and compare two points, $z_1$ and $z_2 > z_1$. Their phases are $-kz_1$ and $-kz_2$; the point farther along the propagation direction has the \emph{smaller} (more negative) phase. The wave reaches $z_2$ later, so at any instant $z_2$ shows an earlier part of the waveform --- it \emph{lags}. Conversely, a point the wave reaches first \emph{leads}.
+
+\section{A wave travelling in an arbitrary direction}
+Let the direction of travel be the unit vector $\uv k$. Nothing in the physics prefers the $z$ axis, so the only change is that ``distance along the axis'' becomes ``distance along $\uv k$''. For a point at position
+\[
+  \vect r = x\,\uv x + y\,\uv y + z\,\uv z ,
+\]
+its distance along the propagation direction is the projection $\uv k\cdot\vect r$. Replace $z$ in (\ref{eq:1d}) by that projection:
+\begin{equation}
+  s(\vect r, t) = \cos\!\left(2\pi f t - k\,\uv k\cdot\vect r\right)
+                = \cos\!\left(2\pi f t - \vect k\cdot\vect r\right),
+  \qquad
+  \vect k = k\,\uv k = k_x\,\uv x + k_y\,\uv y + k_z\,\uv z .
+  \label{eq:3d}
+\end{equation}
+$\vect k$ is the \emph{wavevector}: its direction $\uv k = \vect k/|\vect k|$ is the direction of travel and its length $|\vect k| = 2\pi/\lambda$ is the wavenumber. Check: with $\uv k = \uv z$, $\vect k\cdot\vect r = kz$ and (\ref{eq:3d}) reduces to (\ref{eq:1d}).
+
+The surfaces of constant phase are the planes $\vect k\cdot\vect r = \text{const}$, all perpendicular to $\uv k$ --- hence \emph{plane wave}. Every point on one such plane sees the same phase at the same time. The wave is a plane wave in our setting because the tag is at \SI{295}{cm} and the array is \SI{12}{cm} across: over the array the spherical wavefront from the tag is flat to within a small fraction of a degree of phase.
+
+\section{Phasor form}
+A cosine at a single frequency is completely described by its amplitude and its phase. Write it as the real part of a complex exponential:
+\[
+  \cos\!\left(2\pi f t - \vect k\cdot\vect r\right)
+  = \operatorname{Re}\!\left\{ e^{\,j\left(2\pi f t - \vect k\cdot\vect r\right)} \right\}
+  = \operatorname{Re}\!\left\{ \underbrace{e^{\,-j\,\vect k\cdot\vect r}}_{\text{spatial phasor}}\; e^{\,j 2\pi f t} \right\}.
+\]
+The factor $e^{\,j2\pi ft}$ is the same everywhere; only the spatial phasor differs from point to point. Dropping the common time factor (and, after the mixing of Step~1, it is gone from the sampled data anyway) the wave at $\vect r$ is represented by
+\begin{equation}
+  \boxed{\; s(\vect r) = e^{\,-j\,\vect k\cdot\vect r} \;}
+  \label{eq:phasor}
+\end{equation}
+The sign is inherited from (\ref{eq:1d}): a point farther along $\uv k$ has a more negative phase (it lags), a point behind has a more positive phase (it leads). Two points $\vect r_1, \vect r_2$ differ in phase by $-\vect k\cdot(\vect r_2 - \vect r_1)$, which depends only on their \emph{separation} projected on $\uv k$.
+
+\section{From propagation direction to arrival direction}
+The wave travels \emph{from} the tag \emph{to} the array. In AoA we describe the source by the direction we have to look to see it, the unit vector $\uv s$ from the array centre toward the tag. That is the opposite of the direction of travel:
+\[
+  \uv k = -\,\uv s, \qquad \vect k = -\frac{2\pi}{\lambda}\,\uv s .
+\]
+In the array frame of Step~3 ($+x$ boresight toward the tags, $+z$ up, $+y$ to the tag's right) a tag at azimuth AZ and elevation EL is in direction
+\begin{equation}
+  \uv s = \cos\mathrm{EL}\cos\mathrm{AZ}\;\uv x \;+\; \cos\mathrm{EL}\sin\mathrm{AZ}\;\uv y \;+\; \sin\mathrm{EL}\;\uv z
+        \;=\; \big(\,\cdot\,,\; u,\; v\,\big),
+  \label{eq:s}
+\end{equation}
+where $u = \cos\mathrm{EL}\sin\mathrm{AZ}$ and $v = \sin\mathrm{EL}$ are the direction cosines along $y$ and $z$. Substituting into (\ref{eq:phasor}):
+\begin{equation}
+  s(\vect r) = e^{\,-j\,\vect k\cdot\vect r} = e^{\,+j\,\frac{2\pi}{\lambda}\,\uv s\cdot\vect r} .
+  \label{eq:phasor_s}
+\end{equation}
+The two minus signs have cancelled. Read physically: a point with $\uv s\cdot\vect r > 0$ is displaced \emph{toward the tag}; the wave reaches it first; it leads; its phase is positive. That is the whole content of the steering vector.
+
+\section{The steering vector of the array}
+The sixteen patches lie in the plane $x = 0$ at
+\[
+  \vect r_n = 0\,\uv x + y_n d\,\uv y + z_n d\,\uv z ,
+  \qquad y_n, z_n \in \{-1.5, -0.5, +0.5, +1.5\}, \quad d = \SI{40}{mm}.
+\]
+The $x$-component of $\uv s$ plays no part because every element has $x = 0$ --- the array is blind to the boresight component and only senses $(u, v)$. Putting $\vect r_n$ into (\ref{eq:phasor_s}):
+\begin{equation}
+  s(\vect r_n) = e^{\,j\,\frac{2\pi}{\lambda}\left(u\,y_n d + v\,z_n d\right)}
+              = e^{\,j\psi_n},
+  \qquad
+  \boxed{\;\psi_n = 2\pi\,\frac{d}{\lambda}\,\big(u\,y_n + v\,z_n\big)\;}
+  \label{eq:psi}
+\end{equation}
+This is the phase of the wave at antenna $n$, relative to the array centre, for a source at (AZ, EL). Collect the sixteen values into a vector:
+\[
+  \vect a(\mathrm{AZ}, \mathrm{EL}) = \big[\,e^{\,j\psi_1},\; e^{\,j\psi_2},\; \dots,\; e^{\,j\psi_{16}}\,\big]^T,
+  \qquad a_n = e^{\,j\psi_n}.
+\]
+$\vect a$ is the \textbf{steering vector}. It answers the question ``if a plane wave arrived from (AZ, EL), what pattern of phases would an ideal array show?'' --- and MUSIC works by asking, for each candidate direction, how well that ideal pattern fits the measured one.
+
+Three remarks tie this to the rest of the pipeline.
+
+\paragraph{Why the sign is $+j\psi_n$.} Because $\psi_n$ was defined from the \emph{arrival} direction $\uv s$, not the propagation direction $\uv k$. Had the steering vector been written directly in terms of $\vect k$ it would read $e^{-j\vect k\cdot\vect r_n}$; the two forms are identical. An antenna displaced toward the source ($u\,y_n + v\,z_n > 0$) leads, and a lead is a positive phase. With $d/\lambda = 0.32$ one pitch of displacement along $\uv s$ is $2\pi\cdot 0.32 = 115.2^\circ$.
+
+\paragraph{Referencing to ANT1.} The snapshots of Step~2 have ANT1's phase subtracted, so the steering vector is used in the same form, $a_n \leftarrow a_n\,\bar a_1$, i.e.\ $\psi_n \leftarrow \psi_n - \psi_1$. Only phase \emph{differences} between elements carry direction information; the absolute phase at the array centre was $\phi_0$ in Step~2 and was discarded.
+
+\paragraph{The sign factors $s_y, s_z$.} Equation (\ref{eq:psi}) is the physics. The capture chain may hand us the complex conjugate of every sample (Step~1 showed the mixer convention decides whether a positive frequency offset rotates the I/Q phasor one way or the other, and the same convention governs spatial phase). Conjugating every $e^{j\psi_n}$ is the same as replacing $(y_n, z_n)$ by $(-y_n, -z_n)$, so Step~3 writes
+\[
+  \psi_n = 2\pi\frac{d}{\lambda}\big(s_y\,u\,y_n + s_z\,v\,z_n\big), \qquad s_y, s_z \in \{+1, -1\},
+\]
+and determines the signs from tags of known position. The result $(s_y, s_z) = (-1, -1)$ on every dataset from this board means the recorded I/Q is the conjugate of (\ref{eq:phasor_s}); it does not mean the array is upside down, which would give a mixed result such as $(+1, -1)$.
+
+\section{Worked numbers}
+Tag at pt46: AZ $= 0^\circ$, EL $= -22.1^\circ$, so $u = 0$, $v = \sin(-22.1^\circ) = -0.376$. From (\ref{eq:psi}) with $s_y = s_z = -1$:
+\[
+  \psi_n = 115.2^\circ \times (-1)(-0.376)\, z_n = 43.4^\circ\, z_n .
+\]
+\begin{center}
+\begin{tabular}{crrrr}
+\toprule
+$z_n$ & $+1.5$ & $+0.5$ & $-0.5$ & $-1.5$ \\
+\midrule
+$\psi_n$ & $+65.1^\circ$ & $+21.7^\circ$ & $-21.7^\circ$ & $-65.1^\circ$ \\
+$\psi_n - \psi_1$ (ref.\ ANT1, $z_1 = +1.5$) & $0$ & $-43.4^\circ$ & $-86.8^\circ$ & $-130.2^\circ$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+Because $u = 0$ the phase is the same in every column and steps by $-43.4^\circ$ per row going down --- the ``ideal $\angle a$'' row of the comparison table in Step~3, where the measured pattern was found to follow it with a shallower slope. That shortfall, not the plane-wave model, is what the calibration steps address.
+
+\end{document}

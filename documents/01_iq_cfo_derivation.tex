@@ -1,0 +1,165 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{siunitx}
+\usepackage{booktabs}
+\usepackage[hidelinks]{hyperref}
+\setlength{\parskip}{4pt}
+
+\title{From the Received RF Signal to I/Q Samples\\[4pt]\large and how the carrier frequency offset (CFO) is measured in a BLE 5.1 CTE packet}
+\author{BLE AoA notes --- Silicon Labs BRD4185A (EFR32BG22)}
+\date{September 2026}
+
+\begin{document}
+\maketitle
+
+\noindent\emph{For readers who have not met baseband signals before. Everything below is trigonometry.}
+
+\section{The received signal}
+The tag transmits the Constant Tone Extension (CTE) as a pure tone. At the anchor's antenna it arrives as a cosine with amplitude $A$, frequency $f_r$ and some phase $\phi$:
+\[
+  s_r(t) = A\cos\!\left(2\pi f_r t + \phi\right).
+\]
+The receiver's local oscillator (LO) is tuned to the nominal channel frequency $f_o$. Because the tag's crystal and the anchor's crystal are never exactly equal, and because the CTE tone itself sits \SI{250}{kHz} above the channel centre, the received frequency is not $f_o$ but $f_r = f_o + \Delta f$. Substituting:
+\[
+  s_r(t) = A\cos\!\left(2\pi f_o t + 2\pi\,\Delta f\, t + \phi\right).
+\]
+Everything we care about---the small offset $\Delta f$ and the phase $\phi$---is hidden inside the argument of a cosine oscillating at \SI{2.4}{GHz}. Mixing is how we pull it out.
+
+For compactness write the slow part of the argument as
+\[
+  \theta(t) = 2\pi\,\Delta f\, t + \phi ,
+  \qquad\text{so that}\qquad
+  s_r(t) = A\cos\!\left(2\pi f_o t + \theta(t)\right).
+\]
+
+\section{Expand the cosine}
+Using $\cos(\alpha+\beta) = \cos\alpha\cos\beta - \sin\alpha\sin\beta$ with $\alpha = 2\pi f_o t$ and $\beta = \theta(t)$:
+\[
+  s_r(t) = A\Big[\cos(2\pi f_o t)\cos\theta(t) - \sin(2\pi f_o t)\sin\theta(t)\Big].
+\]
+This already shows the structure: the signal is a fast cosine weighted by $\cos\theta$ plus a fast sine weighted by $\sin\theta$. The two weights are exactly the I and Q values we want. The mixer isolates them one at a time.
+
+\section{The I branch: multiply by $\cos(2\pi f_o t)$}
+\[
+  s_r(t)\cos(2\pi f_o t)
+  = A\Big[\cos^2(2\pi f_o t)\cos\theta - \sin(2\pi f_o t)\cos(2\pi f_o t)\sin\theta\Big].
+\]
+Apply the double-angle identities $\cos^2 x = \tfrac{1}{2}\big(1+\cos 2x\big)$ and $\sin x\cos x = \tfrac{1}{2}\sin 2x$:
+\[
+  s_r(t)\cos(2\pi f_o t)
+  = \frac{A}{2}\cos\theta
+  + \frac{A}{2}\Big[\cos(4\pi f_o t)\cos\theta - \sin(4\pi f_o t)\sin\theta\Big].
+\]
+The bracket is again $\cos(\alpha+\beta)$ with $\alpha = 4\pi f_o t$, so \textbf{before the low-pass filter} the mixer output is
+\begin{equation}
+  s_r(t)\cos(2\pi f_o t)
+  = \underbrace{\frac{A}{2}\cos\theta(t)}_{\text{baseband, slow}}
+  + \underbrace{\frac{A}{2}\cos\!\big(4\pi f_o t + \theta(t)\big)}_{\text{at }2f_o\approx\ \SI{4.8}{GHz}}
+  \label{eq:Imix}
+\end{equation}
+The first term varies at $\Delta f$ (hundreds of kHz); the second oscillates at twice the carrier. A low-pass filter with cut-off well below $2f_o$ removes the second term:
+\[
+  I(t) = \mathrm{LPF}\!\left[s_r(t)\cos(2\pi f_o t)\right]
+       = \frac{A}{2}\cos\theta(t)
+       = I_o\cos\!\left(2\pi\,\Delta f\,t + \phi\right),
+  \qquad I_o = \frac{A}{2}.
+\]
+
+\section{The Q branch: multiply by $\sin(2\pi f_o t)$}
+\[
+  s_r(t)\sin(2\pi f_o t)
+  = A\Big[\sin(2\pi f_o t)\cos(2\pi f_o t)\cos\theta - \sin^2(2\pi f_o t)\sin\theta\Big].
+\]
+With $\sin x\cos x = \tfrac{1}{2}\sin 2x$ and $\sin^2 x = \tfrac{1}{2}\big(1-\cos 2x\big)$:
+\[
+  s_r(t)\sin(2\pi f_o t)
+  = \frac{A}{2}\sin(4\pi f_o t)\cos\theta
+    - \frac{A}{2}\sin\theta
+    + \frac{A}{2}\cos(4\pi f_o t)\sin\theta .
+\]
+Group the two fast terms; they form $\sin(\alpha+\beta)$ with $\alpha = 4\pi f_o t$:
+\begin{equation}
+  s_r(t)\sin(2\pi f_o t)
+  = \underbrace{-\frac{A}{2}\sin\theta(t)}_{\text{baseband, slow}}
+  + \underbrace{\frac{A}{2}\sin\!\big(4\pi f_o t + \theta(t)\big)}_{\text{at }2f_o}
+  \label{eq:Qmix}
+\end{equation}
+After the low-pass filter:
+\[
+  Q(t) = \mathrm{LPF}\!\left[s_r(t)\sin(2\pi f_o t)\right]
+       = -\frac{A}{2}\sin\theta(t)
+       = Q_o\sin\!\left(2\pi\,\Delta f\,t + \phi\right),
+  \qquad Q_o = -\frac{A}{2}.
+\]
+
+\paragraph{A note on the sign.}
+Mixing with $+\sin(2\pi f_o t)$ gives $Q_o = -A/2$. Most receivers, including the EFR32, define the Q-branch LO as $-\sin(2\pi f_o t)$ (equivalently, the complex LO is $e^{-j2\pi f_o t} = \cos - j\sin$), which flips the sign to $Q_o = +A/2$. The choice is a hardware convention; it decides whether a positive $\Delta f$ makes the I/Q phasor rotate counter-clockwise or clockwise. In our data the $+\SI{250}{kHz}$ CTE tone shows up as a phase that \emph{decreases} by about $74^\circ$ per microsecond, i.e.\ as $\Delta f \approx -\SI{206}{kHz}$. That negative sign is this convention at work, and it is the reason the analysis never assumes the sign of $\Delta f$ but always measures it.
+
+\section{Put I and Q together: the complex baseband sample}
+Taking the receiver's convention $Q_o = +A/2$:
+\[
+  z(t) = I(t) + jQ(t)
+        = \frac{A}{2}\Big[\cos\theta(t) + j\sin\theta(t)\Big]
+        = \frac{A}{2}\,e^{\,j\theta(t)}
+        = \frac{A}{2}\,e^{\,j\left(2\pi\,\Delta f\,t + \phi\right)} .
+\]
+The \SI{2.4}{GHz} carrier is gone. What remains is a phasor of constant length $A/2$ that rotates at the offset frequency $\Delta f$, starting from the phase $\phi$.
+
+\section{Sampling, and what the CFO estimator measures}
+The ADC samples $z(t)$ every $T_s = \SI{1}{\micro s}$ during the reference period:
+\[
+  z_k = z(kT_s) = \frac{A}{2}\,e^{\,j\left(2\pi\,\Delta f\,kT_s + \phi\right)},
+  \qquad k = 0,1,\dots,7 .
+\]
+Two consecutive samples differ only by one step of rotation:
+\[
+  \overline{z_k}\,z_{k+1}
+  = \frac{A^2}{4}\,e^{-j(2\pi\Delta f\,kT_s+\phi)}\,e^{\,j(2\pi\Delta f\,(k+1)T_s+\phi)}
+  = \frac{A^2}{4}\,e^{\,j\,2\pi\,\Delta f\,T_s}.
+\]
+The unknown phase $\phi$ cancels. The angle of this product is the phase advance per microsecond, and dividing by $2\pi T_s$ gives $\Delta f$ directly:
+\[
+  \Delta f = \frac{\angle\!\left(\overline{z_k}\,z_{k+1}\right)}{2\pi T_s}.
+\]
+Seven such products are available from the eight reference samples. They are normalised to unit length and averaged (a \emph{circular mean}, so that angles near $\pm180^\circ$ do not cancel):
+\[
+  \rho = \frac{1}{7}\sum_{k=1}^{7}\frac{\overline{z_k}\, z_{k+1}}{|\overline{z_k}\, z_{k+1}|},
+  \qquad \hat{\Delta f} = \frac{\angle\rho}{2\pi T_s}.
+\]
+$|\rho|$ (the mean resultant length, $\gamma$) is a free quality indicator: 1 when the seven phase steps agree exactly, lower when the reference period is noisy. The \SI{1}{\micro s} spacing gives an unambiguous range of $\pm\SI{500}{kHz}$, which comfortably contains $\pm\SI{250}{kHz}$ plus the crystal offset.
+
+\subsection*{Worked example (Dataset19, set1, packet 0)}
+Tag \texttt{84:2e:14:31:ba:9e}, channel 24, RSSI \SI{-58}{dBm}.
+
+\begin{center}
+\begin{tabular}{crrrr}
+\toprule
+$k$ & $I_k$ & $Q_k$ & $|z_k|$ & $\angle z_k$ \\
+\midrule
+1 & $-106$ &   $50$ & 117.2 & $154.7^\circ$ \\
+2 &   $19$ &  $116$ & 117.5 &  $80.7^\circ$ \\
+3 &  $117$ &   $12$ & 117.6 &   $5.9^\circ$ \\
+4 &   $44$ & $-108$ & 116.6 & $-67.8^\circ$ \\
+5 &  $-94$ &  $-71$ & 117.8 & $-142.9^\circ$ \\
+6 &  $-95$ &   $69$ & 117.4 & $144.0^\circ$ \\
+7 &   $41$ &  $109$ & 116.5 &  $69.4^\circ$ \\
+8 &  $114$ &   $-9$ & 114.4 &  $-4.5^\circ$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The seven conjugate products have angles $-74.05^\circ, -74.84^\circ, -73.69^\circ, -75.10^\circ, -73.06^\circ, -74.62^\circ, -73.90^\circ$. Their circular mean is
+\[
+  \rho = 0.2726 - 0.9621j,\qquad |\rho| = 0.99993,\qquad \angle\rho = -74.18^\circ ,
+\]
+so
+\[
+  \hat{\Delta f} = \frac{-74.18^\circ}{360^\circ \times \SI{1}{\micro s}} = -\SI{206.06}{kHz}.
+\]
+De-rotating the eight samples by $\bar\rho^{\,k}$ brings all their phases to $154.5^\circ \pm 0.36^\circ$: the residual is the phase-noise floor of this packet.
+
+\section{Why this matters for angle of arrival}
+When the receiver later switches antennas every \SI{2}{\micro s}, the phase of $z$ keeps rotating at $\Delta f$ regardless of which antenna is connected. The phase difference between two antennas therefore contains a geometric part (what we want) plus $2\pi\,\Delta f\cdot\SI{2}{\micro s} \approx -148^\circ$ per switch (what we must remove). Knowing $\Delta f$ from the reference period lets us multiply each sample by $e^{-j2\pi\Delta f\,t}$ and undo the rotation, leaving only the geometry. Because $\Delta f$ contains the tag's own crystal offset it is different for every tag and drifts with temperature, so it must be measured on every packet and never copied from one tag to another.
+
+\end{document}

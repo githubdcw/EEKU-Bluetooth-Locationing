@@ -1,0 +1,374 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{siunitx}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage[section]{placeins}   % keep floats inside the section they belong to
+\usepackage{listings,xcolor}
+\usepackage[hidelinks]{hyperref}
+\setlength{\parskip}{4pt}
+\renewcommand{\topfraction}{0.9}\renewcommand{\textfraction}{0.05}\renewcommand{\floatpagefraction}{0.7}
+\lstset{language=Python,basicstyle=\ttfamily\small,keywordstyle=\color{blue!70!black},
+        commentstyle=\color{gray},showstringspaces=false,frame=single,breaklines=true}
+\newcommand{\vect}[1]{\mathbf{#1}}
+
+\title{Step 3: Uncalibrated MUSIC\\[4pt]\large Angle of arrival from CFO-corrected snapshots with the ideal array geometry}
+\author{BLE AoA notes --- Dataset19, Silicon Labs BRD4185A 4$\times$4 array}
+\date{September 2026}
+
+\begin{document}
+\maketitle
+
+\section{Where we are}
+Step~2 produced, for every packet, three 16-element snapshots $\vect x$ with the CFO removed and the phase referenced to ANT1:
+\[
+  x_n = A_n\, e^{\,j(\psi_n - \psi_1)}, \qquad n = 1\dots 16,
+\]
+where $\psi_n$ is the spatial phase of antenna $n$ --- the only quantity in the sample that depends on the direction the wave came from. This step turns those snapshots into an estimate of that direction with the MUSIC algorithm (Schmidt, 1986), using nothing but the drawing of the array. No calibration of any kind is applied. The result is the baseline: how well does the textbook method do on this hardware, and where does it fail?
+
+\section{Array geometry and the steering vector}
+
+\subsection{Frame and angles}
+The array lies in the $yz$-plane with its phase centre at the origin. $+x$ is boresight, pointing from the array toward the tags; $+z$ is up; $+y$ is to the right of a tag that faces the array. A tag at $(x, y, z)$ is seen at
+\[
+  \mathrm{AZ} = \operatorname{atan2}(y, x), \qquad
+  \mathrm{EL} = \operatorname{atan2}\!\big(z, \sqrt{x^2 + y^2}\big).
+\]
+Dataset19's grid is in the plane $x = \SI{295}{cm}$, spacing \SI{40}{cm}, so the 49 points span $\mathrm{AZ}, \mathrm{EL} \in [-22.1^\circ, +22.1^\circ]$.
+
+\subsection{Antenna positions}
+Sixteen circularly-polarised patches on a \SI{40}{mm} pitch, numbered column-major, ANT1--4 down the right-hand column as the tag sees it:
+\begin{center}
+\begin{tabular}{c|cccc}
+ & $y=-1.5d$ & $y=-0.5d$ & $y=+0.5d$ & $y=+1.5d$ \\ \hline
+$z=+1.5d$ & 13 & 9  & 5 & 1 \\
+$z=+0.5d$ & 14 & 10 & 6 & 2 \\
+$z=-0.5d$ & 15 & 11 & 7 & 3 \\
+$z=-1.5d$ & 16 & 12 & 8 & 4 \\
+\end{tabular}
+\end{center}
+With $\lambda \approx \SI{125}{mm}$ at \SI{2.44}{GHz}, $d/\lambda = 0.32$: one pitch of extra path is $2\pi\cdot 0.32 = 115.2^\circ$ of phase.
+
+\subsection{The steering vector}
+A plane wave arriving from $(\mathrm{AZ}, \mathrm{EL})$ has direction cosines
+\[
+  u = \cos\mathrm{EL}\,\sin\mathrm{AZ} \ \ (\text{along } y), \qquad
+  v = \sin\mathrm{EL} \ \ (\text{along } z).
+\]
+Antenna $n$ at $(y_n, z_n)$ (in units of $d$) receives the wavefront a distance $d\,(u\,y_n + v\,z_n)$ before the array centre does, so its phase leads by (Appendix~I derives this from the plane-wave expression $\cos(2\pi f t - \vect k\cdot\vect r)$, including why the sign of the phase is positive for an element displaced toward the source)
+\begin{equation}
+  \psi_n(\mathrm{AZ}, \mathrm{EL}) = 2\pi\frac{d}{\lambda}\big(s_y\,u\,y_n + s_z\,v\,z_n\big),
+  \qquad a_n = e^{\,j\psi_n}.
+  \label{eq:steer}
+\end{equation}
+The vector $\vect a(\mathrm{AZ}, \mathrm{EL}) = [a_1, \dots, a_{16}]^T$, referenced to ANT1 like the snapshots, is the \textbf{steering vector}: the phase pattern an ideal array would show for that direction. Two things about it matter for what follows.
+
+First, the array only responds to $(u, v)$. Two directions with the same direction cosines are indistinguishable; the grid search below is over $(\mathrm{AZ}, \mathrm{EL})$ for readability, but the resolution of the array is uniform in $(u, v)$, not in angle.
+
+Second, the factors $s_y, s_z \in \{+1, -1\}$. Physically both are $+1$. But the capture chain --- the mixer's I/Q convention, the sign of the phase the radio reports --- can conjugate every measured sample, and $e^{-j\psi(y, z)} = e^{+j\psi(-y, -z)}$: a conjugated snapshot looks exactly like an unconjugated one from an array with both axes negated. The sign cannot be derived from the hardware description with confidence; it has to be measured on tags of known position. Every earlier dataset from this board required $(s_y, s_z) = (-1, -1)$. Section~\ref{sec:fourway} tests it on this one.
+
+\section{The MUSIC algorithm}
+
+\subsection{Signal model}
+With one tag and no multipath, every snapshot is the true steering vector times a complex amplitude, plus noise:
+\[
+  \vect x_m = \vect a(\mathrm{AZ}_0, \mathrm{EL}_0)\, s_m + \vect n_m, \qquad m = 1\dots M.
+\]
+Each snapshot is a point in $\mathbb C^{16}$. The signal part lies on a single line through the origin (the direction of $\vect a$); the noise spreads over all sixteen dimensions. MUSIC exploits this separation.
+
+\subsection{Covariance}
+Stack the $M$ snapshots as columns of $\vect X$ (16$\times M$). The superscript $^H$ denotes the \emph{Hermitian transpose} (conjugate transpose): $\vect X^H = (\bar{\vect X})^T$, i.e.\ transpose the matrix and take the complex conjugate of every entry. For a single snapshot, $\vect x\vect x^H$ is the $16\times16$ matrix whose $(m,n)$ entry is $x_m\bar x_n = A_mA_n\,e^{\,j(\psi_m-\psi_n)}$ --- the amplitude product and the \emph{phase difference} between antennas $m$ and $n$, which is exactly the direction-carrying quantity of Step~2. (For real vectors $^H$ reduces to the ordinary transpose $^T$; for complex vectors $\vect x^T\vect x$ would add phases instead of subtracting them and is meaningless here.) The sample covariance is the average of these outer products:
+\begin{equation}
+  \vect R = \frac{1}{M}\,\vect X\vect X^{H}
+  = \sigma_s^2\,\vect a\vect a^{H} + \sigma_n^2\,\vect I \qquad (16\times 16).
+  \label{eq:cov}
+\end{equation}
+The order of the factors matters. $\vect X\vect X^H$ gives $\vect R$; $\vect X^H\vect X$ --- or, if the snapshots are stored as \emph{rows}, \texttt{X.conj().T @ X} --- gives $\vect R^*$, whose principal eigenvector is $\bar{\vect a}$ and whose MUSIC peak appears at the mirror direction. For snapshots stored as rows of an $(M, 16)$ array the correct expression is \texttt{X.T @ X.conj() / M}.
+
+\subsection{Eigen-decomposition}
+A matrix is \emph{Hermitian} if it equals its own conjugate transpose, $\vect R^H = \vect R$: the entry at $(n,m)$ is the complex conjugate of the entry at $(m,n)$, and the diagonal is real. $\vect R$ is Hermitian by construction, because $(\vect x\vect x^H)^H = \vect x\vect x^H$ for every snapshot; concretely, $R_{mn} = \langle x_m\,\overline{x_n}\rangle$ and swapping the indices conjugates it, $R_{nm} = \overline{R_{mn}}$; and $R_{nn} = \langle |x_n|^2\rangle$ is the mean power on antenna $n$. Hermitian matrices are the complex counterpart of real symmetric matrices and inherit their two useful properties: all eigenvalues are real, and the eigenvectors can be chosen orthonormal ($\vect e_i^H\vect e_k = 0$ for $i \ne k$, $\|\vect e_i\| = 1$).
+
+So $\vect R$ has sixteen real eigenvalues $\lambda_1 \ge \lambda_2 \ge \dots \ge \lambda_{16} \ge 0$ and an orthonormal set of eigenvectors $\vect e_1, \dots, \vect e_{16}$. The eigenvalues are non-negative because $\vect R$ is an average of outer products: $\vect e^H\vect R\vect e = \frac1M\sum_m|\vect e^H\vect x_m|^2 \ge 0$ for any $\vect e$. They can be exactly zero: if fewer than 16 snapshots are used ($M < 16$), $\vect R$ has rank at most $M$ and at least $16-M$ eigenvalues vanish; and even with $M \ge 16$, a noiseless single source would give $\lambda_2 = \dots = \lambda_{16} = 0$, since every snapshot lies on the same line and $\vect R$ has rank one. Real data always contains noise, which lifts the small eigenvalues to about $\sigma_n^2$, but this is why $M > 16$ is required in practice: with $M \le 16$ some noise eigenvalues are identically zero, their eigenvectors are arbitrary, and the noise subspace is not determined by the data. For one source in white noise, (\ref{eq:cov}) gives
+\[
+  \lambda_1 = 16\,\sigma_s^2 + \sigma_n^2 \ \text{ along } \vect e_1 \parallel \vect a,
+  \qquad
+  \lambda_2 = \dots = \lambda_{16} = \sigma_n^2 \ \text{ in the space orthogonal to } \vect a.
+\]
+The eigenvectors split into the \textbf{signal subspace} $\vect e_1$ (which spans the same line as $\vect a$, so $\vect e_1$ is the array's \emph{measured} phase pattern for this tag) and the \textbf{noise subspace} $\vect E_n = [\vect e_2 \cdots \vect e_{16}]$, a $16\times 15$ matrix orthogonal to $\vect a$.
+
+The ratio $\lambda_1/\lambda_2$ is a free diagnostic. A clean single-path window gives a large ratio; a second arrival of comparable strength (a strong reflection) lifts $\lambda_2$ and the ratio collapses toward one. It is recorded for every window below.
+
+\subsection{Pseudo-spectrum}
+Since $\vect a(\mathrm{AZ}_0, \mathrm{EL}_0)$ is orthogonal to every noise eigenvector, $\|\vect E_n^H\vect a(\mathrm{AZ}_0, \mathrm{EL}_0)\|^2 \approx 0$; for any other direction the projection is not small. MUSIC scans a grid of candidate directions with
+\begin{equation}
+  P(\mathrm{AZ}, \mathrm{EL}) = \frac{1}{\|\vect E_n^{H}\,\vect a(\mathrm{AZ}, \mathrm{EL})\|^2}
+  \label{eq:music}
+\end{equation}
+and reports the location of the maximum. $P$ is called a \emph{pseudo}-spectrum because its height has no power meaning; only the position of its peak does. The grid used here is $\mathrm{AZ} \in [-40^\circ, 40^\circ]$, $\mathrm{EL} \in [-30^\circ, 30^\circ]$ at $0.5^\circ$ --- 19\,481 directions --- and the $19\,481\times 16$ steering matrix $\vect A$ is computed once per sign convention.
+
+$\vect R$ needs $M > 16$ snapshots to have full rank (see the remark on zero eigenvalues above) and behaves well only for $M \gg 16$; with three snapshots per packet a window of 50 packets gives $M = 150$.
+
+\paragraph{An implementation trap.}
+The denominator of (\ref{eq:music}) is $\|\vect E_n^H\vect a\|^2$. Write it out for one candidate direction: $\vect E_n^H\vect a$ is a vector of 15 numbers, the $i$-th being
+\[
+  (\vect E_n^H\vect a)_i = \vect e_{i+1}^H\,\vect a = \sum_{n=1}^{16} \overline{(e_{i+1})_n}\; a_n ,
+\]
+the inner product of noise eigenvector $\vect e_{i+1}$ with $\vect a$, \emph{with the eigenvector conjugated}. Taking the squared magnitude and summing over $i$ gives the denominator. Its value is unchanged if we conjugate the whole thing, $\|\vect E_n^H\vect a\|^2 = \|\vect E_n^T\bar{\vect a}\|^2$, so an equivalent form conjugates $\vect a$ instead of $\vect E_n$: $\sum_n (e_{i+1})_n\,\overline{a_n} = \vect a^H\vect e_{i+1}$. Either the eigenvector or the steering vector must carry the conjugate; exactly one of them.
+
+In the implementation used here (the \texttt{music()} function of the Step~3 notebook, reproduced in \S\ref{sec:code}) the 19\,481 steering vectors are stored as the \emph{rows} of a matrix $\vect A$ (row $m$ is $\vect a_m^T$, no conjugate), and $\vect E_n$ is $16\times15$. The matrix product \texttt{A @ En} then has $(m,i)$ entry $\sum_n (a_m)_n\,(e_{i+1})_n = \vect e_{i+1}^T\vect a_m$ --- \emph{neither} factor is conjugated. That is not the inner product; it is the inner product of $\vect e_{i+1}$ with $\bar{\vect a}_m$:
+\[
+  \vect e_{i+1}^T\vect a_m = \sum_n (e_{i+1})_n (a_m)_n = \overline{\,\vect e_{i+1}^H\,\bar{\vect a}_m\,}.
+\]
+So \texttt{A @ En} evaluates the MUSIC spectrum at the conjugate steering vectors. From (\ref{eq:steer}), $\bar{\vect a}(\mathrm{AZ}, \mathrm{EL})$ has phases $-\psi_n$, which is the steering vector of the direction with $(u, v) \to (-u, -v)$, i.e.\ $(\mathrm{AZ}, \mathrm{EL}) \to (-\mathrm{AZ}, -\mathrm{EL})$. The spectrum is therefore the correct spectrum reflected through boresight, and its peak sits at the mirror image of the true direction --- just as sharp, just as high, with the same eigenvalue ratio, and with nothing in the numbers to suggest anything is wrong. The correct call is \texttt{conj(A) @ En}, whose $(m,i)$ entry is $\vect a_m^H\vect e_{i+1}$.
+
+This is the second route to a mirrored answer, the first being the covariance order in \S3.2 (\texttt{X.conj().T @ X} giving $\vect R^*$). The two errors cancel if both are made. Neither produces a warning, a low peak or a bad eigenvalue ratio; only a comparison against tags of known position --- the four-way test of \S\ref{sec:fourway} --- catches them, and it does so because a conjugation error and a sign error in the antenna table are the same thing from the estimator's point of view.
+
+\section{Worked example: one window}
+\subsection{A well-behaved point: pt46}
+The first 50 packets of the reference tag at pt46 in set1 (bottom row, centre column; survey $\mathrm{AZ} = 0.0^\circ$, $\mathrm{EL} = -22.1^\circ$), 150 snapshots spanning 29 channels, mean RSSI \SI{-59}{dBm}, processed with $(s_y, s_z) = (-1, -1)$.
+
+\begin{center}
+\begin{tabular}{lcccccc}
+\toprule
+$\lambda_k/\lambda_1$, $k = 1\dots5$ & 1.000 & 0.186 & 0.045 & 0.030 & 0.015 \\
+\midrule
+$\lambda_1/\lambda_2$ & \multicolumn{5}{l}{5.4} \\
+MUSIC peak & \multicolumn{5}{l}{$\mathrm{AZ} = -3.0^\circ$, $\mathrm{EL} = -16.5^\circ$} \\
+Survey & \multicolumn{5}{l}{$\mathrm{AZ} = 0.0^\circ$, $\mathrm{EL} = -22.1^\circ$} \\
+Error & \multicolumn{5}{l}{$\Delta\mathrm{AZ} = -3.0^\circ$, $\Delta\mathrm{EL} = +5.6^\circ$} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{figure}[htbp]\centering
+\includegraphics[width=\textwidth]{fig3_1.png}
+\caption{Left: eigenvalues of $\vect R$ for the example window --- one dominant value and fifteen noise values. Right: MUSIC pseudo-spectrum with the survey position (white cross) and the peak (red).}
+\end{figure}
+
+The spectrum has one sharp peak; the geometry alone has put it in the right region of the sky, \SI{6}{\degree} from the survey. The comparison between the measured phase pattern $\vect e_1$ and the ideal steering vector at the surveyed direction (Table~\ref{tab:pt46_e1}) shows where that \SI{6}{\degree} comes from:
+
+\begin{table}[htbp]\centering\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{tabular}{l*{16}{r}}
+\toprule
+ant & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 & 11 & 12 & 13 & 14 & 15 & 16 \\
+\midrule
+$\angle e_1$ meas. & 0 & $-22$ & $-56$ & $-61$ & 18 & $-37$ & $-51$ & $-110$ & 61 & $-41$ & $-36$ & $-109$ & $-7$ & $-50$ & $-78$ & $-105$ \\
+$\angle a$ ideal & 0 & $-43$ & $-87$ & $-130$ & 0 & $-43$ & $-87$ & $-130$ & 0 & $-43$ & $-87$ & $-130$ & 0 & $-43$ & $-87$ & $-130$ \\
+difference & 0 & 21 & 31 & 69 & 18 & 6 & 36 & 21 & 61 & 3 & 51 & 21 & $-7$ & $-6$ & 9 & 25 \\
+$|e_1|$ (norm.) & 1.0 & 0.5 & 0.6 & 0.4 & 0.4 & 0.4 & 0.4 & 0.1 & 0.5 & 0.4 & 0.5 & 0.3 & 0.7 & 0.5 & 0.6 & 0.8 \\
+\bottomrule
+\end{tabular}
+\caption{pt46, first window: measured principal-eigenvector phase $\angle e_1$ against the ideal steering-vector phase at the surveyed direction, degrees, referenced to ANT1, and the normalised eigenvector amplitude.}\label{tab:pt46_e1}
+\end{table}
+
+Because this tag is at $\mathrm{AZ} = 0$, the ideal pattern is the same down every column and constant along every row. The measured pattern follows the down-column ramp but with a smaller slope (hence the elevation error), and it is \emph{not} constant along rows (ANT5 and ANT9 read $+18^\circ$ and $+61^\circ$ where the ideal is $0$). Those residuals --- per-element phase offsets, mutual coupling, and possibly a second arrival --- are what calibration is for. The MUSIC peak is the direction whose ideal pattern best matches this distorted one.
+
+\subsection{A problematic point: pt42}
+Now the same procedure on the point that fails worst in the full run: pt42, bottom row, far left (survey $\mathrm{AZ} = -22.1^\circ$, $\mathrm{EL} = -14.1^\circ$), recorded in set7 with tag \texttt{b6:f2}. First 50 packets, 150 snapshots, 29 channels, mean RSSI \SI{-64}{dBm} --- \SI{5}{dB} weaker than pt46.
+
+\begin{center}
+\begin{tabular}{lccccc}
+\toprule
+$\lambda_k/\lambda_1$, $k = 1\dots5$ & 1.000 & 0.273 & 0.085 & 0.023 & 0.018 \\
+\midrule
+$\lambda_1/\lambda_2$ & \multicolumn{5}{l}{3.7 \quad (pt46: 5.4)} \\
+MUSIC peak & \multicolumn{5}{l}{$\mathrm{AZ} = -15.0^\circ$, $\mathrm{EL} = +27.0^\circ$} \\
+Survey & \multicolumn{5}{l}{$\mathrm{AZ} = -22.1^\circ$, $\mathrm{EL} = -14.1^\circ$} \\
+Error & \multicolumn{5}{l}{$\Delta\mathrm{AZ} = +7.1^\circ$, $\Delta\mathrm{EL} = +41.1^\circ$} \\
+Second local maximum & \multicolumn{5}{l}{$(-4.0^\circ, -30.0^\circ)$ at \SI{-4.9}{dB}, on the grid edge} \\
+$P$ at the survey direction & \multicolumn{5}{l}{\SI{-5.5}{dB} below the peak} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{figure}[htbp]\centering
+\includegraphics[width=\textwidth]{fig3_pt42.png}
+\caption{pt42: eigenvalues and pseudo-spectrum for the first window. The colour scale spans only \SI{6}{dB} (the full range of this spectrum), with \SI{1}{dB} contours. The peak (red) is on the wrong side of the horizon from the survey position (white cross), which sits in the valley; a second lobe appears at the bottom edge.}
+\end{figure}
+
+Everything about this window says ``two arrivals''. $\lambda_2$ is 27\,\% of $\lambda_1$ rather than 19\,\%, so the second eigenvector carries real signal, not noise. The survey direction is not inside the main lobe: the pseudo-spectrum there is \SI{5.5}{dB} below the peak, which, in a spectrum whose entire range from peak to floor is only \SI{5.5}{dB}, means the survey direction sits at the bottom of a valley. (For pt46 the survey direction is \SI{0.7}{dB} below the peak --- inside the lobe, $6^\circ$ from its top. Uncalibrated MUSIC never produces deep nulls on this array, because the tens-of-degrees element errors of \S4.1 keep the ideal steering vector from being orthogonal to the noise subspace anywhere; both spectra span only 6--7\,dB. What distinguishes the two cases is whether the truth lies in the lobe or in the valley.) There is also a second lobe. And the estimate is stable --- all 12 windows of pt42 return $\mathrm{EL} \approx +29.5^\circ$ with a standard deviation of $1.2^\circ$ --- so this is not noise picking a random direction; the covariance is consistently dominated by something that is not the direct path.
+
+The measured phase pattern (Table~\ref{tab:pt42_e1}) shows what:
+
+\begin{table}[htbp]\centering\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{tabular}{l*{16}{r}}
+\toprule
+ant & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 & 11 & 12 & 13 & 14 & 15 & 16 \\
+\midrule
+$\angle e_1$ meas. & 0 & 17 & 44 & 85 & $-87$ & $-95$ & 9 & 48 & $-111$ & $-102$ & $-9$ & 39 & $-158$ & $-95$ & $-33$ & 70 \\
+$\angle a$ ideal (survey) & 0 & $-28$ & $-56$ & $-84$ & $-42$ & $-70$ & $-98$ & $-126$ & $-84$ & $-112$ & $-140$ & $-168$ & $-126$ & $-154$ & 178 & 150 \\
+difference & 0 & 45 & 100 & 169 & $-45$ & $-25$ & 107 & 174 & $-27$ & 10 & 131 & $-152$ & $-32$ & 60 & 149 & $-79$ \\
+$|e_1|$ (norm.) & 0.5 & 0.3 & 0.5 & 1.0 & 0.5 & 0.6 & 0.5 & 0.8 & 0.7 & 0.8 & 0.7 & 0.8 & 0.7 & 0.5 & 0.3 & 0.6 \\
+\bottomrule
+\end{tabular}
+\caption{pt42, first window: measured principal-eigenvector phase $\angle e_1$ against the ideal steering-vector phase at the surveyed direction, degrees, referenced to ANT1. Down every column the measured phase rises where the survey requires it to fall.}\label{tab:pt42_e1}
+\end{table}
+
+Read down the first column (ANT1$\to$4, top to bottom of the array). The survey direction, below the horizon, requires the phase to \emph{fall} down the column: $0, -28, -56, -84$. The measured phase \emph{rises}: $0, +17, +44, +85$. The same inversion appears in every column (ANT5$\to$8: $-87 \to +48$; ANT9$\to$12: $-111 \to +39$). The array is reporting a wave that arrives from \emph{above}, with a vertical phase gradient of the right magnitude but the wrong sign --- which is exactly what a specular reflection from the ceiling produces: an image of the tag at height $2h_\text{ceiling} - z_\text{tag}$, seen at positive elevation. At pt42 the direct path is weak (the far-left bottom corner has the lowest RSSI on the grid) and the ceiling image is comparable in strength, so the single-source covariance is a mixture of the two and MUSIC, allowed one source, follows the stronger. The AZ error of $7^\circ$ is the same effect: the image sits at a slightly different azimuth than the tag, and the mixture peaks between them.
+
+Contrast this with pt46 in \S4.1. There the differences between measured and ideal were tens of degrees and irregular --- element-level calibration errors on top of a correctly-signed gradient. Here the gradient itself has the wrong sign along $z$, which no per-element calibration can repair. pt42 fails for the same reason with a different tag in each of the earlier datasets from this room: it is a property of the location, not of the tag or the array. Separating the two arrivals is the subject of the multipath step; \S6 lists the other points (pt18) where the same signature appears more weakly.
+
+\section{The steering-vector sign: four-way test}\label{sec:fourway}
+MUSIC is run with all four sign combinations on every reference tag (eleven fixed tags of known position, present in all seven sets), in windows of 50 packets; the median estimate per tag is compared with the survey and the absolute errors averaged.
+
+\begin{center}
+\begin{tabular}{cc|cc}
+\toprule
+$s_y$ & $s_z$ & AZ MAE & EL MAE \\
+\midrule
+$-1$ & $-1$ & $\mathbf{2.18^\circ}$ & $\mathbf{2.62^\circ}$ \\
+$-1$ & $+1$ & $2.18^\circ$ & $28.36^\circ$ \\
+$+1$ & $-1$ & $33.03^\circ$ & $2.62^\circ$ \\
+$+1$ & $+1$ & $33.03^\circ$ & $28.36^\circ$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The two axes separate exactly: $s_y$ changes only the AZ column, $s_z$ only the EL column, and the wrong sign on either axis produces the mirror-image error (twice the mean $|\mathrm{AZ}|$ or $|\mathrm{EL}|$ of the reference tags). $(s_y, s_z) = (-1, -1)$ is selected, the same as every earlier dataset. The boresight tag pt25 alone could not have decided this; the corner tags do.
+
+\section{Results on every point}
+Windows of 50 packets, MUSIC with $(-1, -1)$, every (set, point) combination: 1\,404 windows over 116 combinations. The table gives the median over windows per grid point (reference tags pooled across all sets). Errors are estimate minus survey.
+
+\begin{center}\small
+\begin{tabular}{ccr rrr rrr rr}
+\toprule
+pt & role & win & AZ & $\widehat{\mathrm{AZ}}$ & $\Delta$AZ & EL & $\widehat{\mathrm{EL}}$ & $\Delta$EL & $\lambda_1/\lambda_2$ & RSSI \\
+\midrule
+1 & ref & 89 & $22.1$ & $20.5$ & $-1.6$ & $20.6$ & $21.0$ & $+0.4$ & 34 & -54 \\
+4 & ref & 107 & $0.0$ & $0.0$ & $+0.0$ & $22.1$ & $22.0$ & $-0.1$ & 44 & -45 \\
+7 & ref & 69 & $-22.1$ & $-24.0$ & $-1.9$ & $20.6$ & $22.5$ & $+1.9$ & 58 & -46 \\
+8 & grid & 7 & $22.1$ & $24.0$ & $+1.9$ & $14.1$ & $21.0$ & $+6.9$ & 12 & -52 \\
+11 & grid & 24 & $0.0$ & $0.0$ & $+0.0$ & $15.2$ & $5.0$ & $-10.2$ & 7 & -55 \\
+13 & grid & 12 & $-15.2$ & $-16.5$ & $-1.3$ & $14.7$ & $10.0$ & $-4.7$ & 55 & -48 \\
+14 & grid & 28 & $-22.1$ & $-22.5$ & $-0.4$ & $14.1$ & $8.0$ & $-6.1$ & 13 & -46 \\
+15 & ref & 108 & $22.1$ & $18.5$ & $-3.6$ & $7.2$ & $15.0$ & $+7.8$ & 28 & -49 \\
+18 & grid & 35 & $0.0$ & $-1.0$ & $-1.0$ & $7.7$ & $-7.5$ & $-15.2$ & 5 & -58 \\
+21 & ref & 82 & $-22.1$ & $-23.5$ & $-1.4$ & $7.2$ & $10.5$ & $+3.3$ & 22 & -48 \\
+25 & ref & 128 & $0.0$ & $-2.5$ & $-2.5$ & $0.0$ & $-1.2$ & $-1.2$ & 4 & -61 \\
+29 & ref & 91 & $22.1$ & $23.5$ & $+1.4$ & $-7.2$ & $-4.0$ & $+3.2$ & 14 & -49 \\
+32 & grid & 17 & $0.0$ & $-4.5$ & $-4.5$ & $-7.7$ & $-5.5$ & $+2.2$ & 8 & -56 \\
+35 & ref & 99 & $-22.1$ & $-20.0$ & $+2.1$ & $-7.2$ & $-1.5$ & $+5.7$ & 6 & -55 \\
+36 & grid & 20 & $22.1$ & $26.0$ & $+3.9$ & $-14.1$ & $-25.0$ & $-10.9$ & 11 & -55 \\
+37 & grid & 25 & $15.2$ & $15.0$ & $-0.2$ & $-14.7$ & $-23.5$ & $-8.8$ & 46 & -50 \\
+38 & grid & 26 & $7.7$ & $7.5$ & $-0.2$ & $-15.0$ & $-25.0$ & $-10.0$ & 39 & -53 \\
+39 & grid & 41 & $0.0$ & $-2.0$ & $-2.0$ & $-15.2$ & $-22.0$ & $-6.8$ & 6 & -66 \\
+40 & grid & 19 & $-7.7$ & $-9.5$ & $-1.8$ & $-15.0$ & $-20.5$ & $-5.5$ & 103 & -50 \\
+41 & grid & 34 & $-15.2$ & $-18.0$ & $-2.8$ & $-14.7$ & $-20.0$ & $-5.3$ & 76 & -51 \\
+42 & grid & 12 & $-22.1$ & $-15.2$ & $+6.9$ & $-14.1$ & $29.5$ & $+43.6$ & 4 & -64 \\
+43 & ref & 124 & $22.1$ & $25.5$ & $+3.4$ & $-20.6$ & $-21.5$ & $-0.9$ & 5 & -60 \\
+46 & ref & 106 & $0.0$ & $-3.0$ & $-3.0$ & $-22.1$ & $-17.5$ & $+4.6$ & 7 & -58 \\
+48 & grid & 14 & $-15.2$ & $-14.0$ & $+1.2$ & $-21.4$ & $-17.5$ & $+3.9$ & 4 & -60 \\
+49 & ref & 87 & $-22.1$ & $-25.0$ & $-2.9$ & $-20.6$ & $-20.5$ & $+0.1$ & 13 & -55 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+ & MAE & median $|$err$|$ & worst \\
+\midrule
+AZ & $2.08^\circ$ & $1.90^\circ$ & $6.9^\circ$ (pt42) \\
+EL & $6.77^\circ$ & $5.30^\circ$ & $43.6^\circ$ (pt42) \\
+\bottomrule
+\end{tabular}
+\qquad
+\begin{tabular}{lc}
+\toprule
+window-to-window std (median over points) & \\
+\midrule
+AZ & $0.4^\circ$ \\
+EL & $0.5^\circ$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{figure}[htbp]\centering
+\includegraphics[width=0.62\textwidth]{fig3_2.png}
+\caption{Median MUSIC estimate per point (dots) against the surveyed position (crosses), in the array's view ($+y$ on the left). Red: reference tags; blue: tracking tags.}
+\end{figure}
+
+\begin{figure}[htbp]\centering
+\includegraphics[width=\textwidth]{fig3_3.png}
+\caption{AZ and EL error laid out on the tag grid (median over windows, degrees). The elevation error depends on the row, not on the column.}
+\end{figure}
+
+\subsection{Reading the results}
+Three patterns stand out, and they set the agenda for the following steps.
+
+\paragraph{Azimuth is good everywhere except one point.} Median $|\Delta\mathrm{AZ}| = 1.9^\circ$, with no visible dependence on position. The exception is pt42 (bottom row, far left), $6.9^\circ$ off.
+
+\paragraph{Elevation has a row-dependent bias.} The middle rows ($\mathrm{EL} = 0, \pm 7^\circ$) read 3--8$^\circ$ too high; the bottom row ($\mathrm{EL} = -15^\circ$) reads 5--11$^\circ$ too \emph{low}; the top row is nearly unbiased. A bias that depends on the tag's height and not on its azimuth points at a specular reflection from floor or ceiling: an image arrival close in angle to the direct path pulls the single MUSIC peak toward it.
+
+\paragraph{Two points are mirrored in elevation.} pt42 (survey $-14.1^\circ$, MUSIC $+29.5^\circ$) and pt18 (survey $+7.7^\circ$, MUSIC $-7.5^\circ$). Their eigenvalue ratios, 4.2 and 5.3, are among the lowest in the table: the covariance holds two arrivals of similar strength and the one-source MUSIC has locked onto the wrong one. Both points fail with different tags in the earlier datasets from this room, so these are location effects, not hardware.
+
+The window-to-window standard deviation is $0.4$--$0.5^\circ$ and the reference tags repeat to within about $0.5^\circ$ across all eight recordings (Table~\ref{tab:refsets}), so none of the above is noise. The errors are systematic --- which is what makes them correctable.
+
+\begin{table}[htbp]\centering\footnotesize\setlength{\tabcolsep}{1.8pt}
+\begin{tabular}{c|rrrrrrrr|rrrrrrrr}
+\toprule
+ & \multicolumn{8}{c|}{$\widehat{\mathrm{AZ}}$ per set} & \multicolumn{8}{c}{$\widehat{\mathrm{EL}}$ per set} \\
+pt & 1 & 2 & 3 & 4 & 5 & 6 & 7 & test & 1 & 2 & 3 & 4 & 5 & 6 & 7 & test \\
+\midrule
+1  & 20.5 & 20.2 & 20.5 & 20.5 & 20.5 & 20.5 & 20.5 & 20.5 & 20.5 & 20.5 & 21.0 & 20.8 & 20.5 & 21.0 & 21.0 & 21.0 \\
+4  & 0.0 & 0.0 & 0.2 & 0.0 & 0.0 & 0.0 & 0.5 & 0.5 & 21.5 & 21.5 & 22.0 & 22.0 & 22.0 & 22.0 & 22.0 & 21.8 \\
+7  & $-24.0$ & $-24.0$ & $-24.5$ & $-24.0$ & $-24.0$ & $-24.0$ & $-24.0$ & $-24.5$ & 22.5 & 22.5 & 22.2 & 22.5 & 22.5 & 22.5 & 22.5 & 22.0 \\
+15 & 18.5 & 18.5 & 18.5 & 18.5 & 19.0 & 18.5 & 19.0 & 19.0 & 15.0 & 15.0 & 15.0 & 15.0 & 15.0 & 15.0 & 15.0 & 15.5 \\
+21 & $-23.5$ & $-23.5$ & $-23.5$ & $-24.0$ & $-23.5$ & $-24.0$ & $-23.5$ & $-24.0$ & 10.5 & 10.5 & 10.0 & 10.0 & 10.5 & 10.5 & 10.5 & 10.5 \\
+25 & $-3.0$ & $-2.5$ & $-2.5$ & $-2.5$ & $-3.0$ & $-2.5$ & $-2.5$ & $-3.0$ & $-1.0$ & $-1.5$ & $-1.0$ & $-0.8$ & $-1.5$ & $-1.5$ & $-2.0$ & $-1.2$ \\
+29 & 23.0 & 24.0 & 23.5 & 24.0 & 23.5 & 23.8 & 24.0 & 23.0 & $-3.0$ & $-4.0$ & $-4.0$ & $-3.8$ & $-3.5$ & $-3.8$ & $-4.0$ & $-3.5$ \\
+35 & $-23.0$ & $-20.0$ & $-20.0$ & $-19.5$ & $-20.0$ & $-19.5$ & $-19.5$ & $-22.2$ & $-2.5$ & $-1.5$ & $-2.0$ & $-1.5$ & $-1.5$ & $-1.5$ & $-2.0$ & $-2.8$ \\
+43 & 25.5 & 25.5 & 25.5 & 26.0 & 25.5 & 25.5 & 25.5 & 26.5 & $-22.0$ & $-21.5$ & $-22.0$ & $-22.0$ & $-21.5$ & $-22.0$ & $-21.5$ & $-22.5$ \\
+46 & $-3.5$ & $-3.0$ & $-3.5$ & $-2.8$ & $-2.5$ & $-2.5$ & $-2.5$ & $-3.0$ & $-17.0$ & $-17.2$ & $-17.5$ & $-17.5$ & $-17.0$ & $-17.5$ & $-17.5$ & $-17.5$ \\
+49 & $-23.0$ & $-25.0$ & $-24.8$ & $-25.5$ & $-25.5$ & $-25.2$ & $-25.0$ & $-23.0$ & $-20.0$ & $-20.5$ & $-20.2$ & $-20.5$ & $-20.5$ & $-20.5$ & $-20.0$ & $-20.0$ \\
+\bottomrule
+\end{tabular}
+\caption{Repeatability of the eleven reference tags: median MUSIC estimate (degrees) per recording, uncalibrated, $(s_y, s_z) = (-1,-1)$, windows of 50 packets. Each tag stays within about $0.5^\circ$ of itself across all eight recordings.}\label{tab:refsets}
+\end{table}
+
+\begin{figure}[htbp]\centering
+\includegraphics[width=0.6\textwidth]{fig3_4.png}
+\caption{Total angular error against the median eigenvalue ratio $\lambda_1/\lambda_2$. The two mirrored points and the low-row points cluster at low ratios.}
+\end{figure}
+
+\section{Reference code}\label{sec:code}
+\begin{lstlisting}
+import numpy as np
+D_OVER_LAMBDA = 0.32
+_layout = [[13, 9, 5, 1], [14,10, 6, 2], [15,11, 7, 3], [16,12, 8, 4]]   # tag view
+_y = [-1.5, -0.5, 0.5, 1.5];  _z = [1.5, 0.5, -0.5, -1.5]
+POS = {a: (_y[c], _z[r]) for r, row in enumerate(_layout) for c, a in enumerate(row)}
+ANT_Y = np.array([POS[n][0] for n in range(1, 17)])
+ANT_Z = np.array([POS[n][1] for n in range(1, 17)])
+
+def steering(az_deg, el_deg, sy=-1, sz=-1):
+    az, el = np.radians(az_deg), np.radians(el_deg)
+    u, v = np.cos(el)*np.sin(az), np.sin(el)
+    psi = 2*np.pi*D_OVER_LAMBDA*(sy*u[..., None]*ANT_Y + sz*v[..., None]*ANT_Z)
+    a = np.exp(1j*psi)
+    return a*np.conj(a[..., [0]])                 # reference to ANT1
+
+AZ_GRID = np.arange(-40, 40.01, 0.5); EL_GRID = np.arange(-30, 30.01, 0.5)
+AZm, ELm = np.meshgrid(AZ_GRID, EL_GRID)
+A = steering(AZm.ravel(), ELm.ravel())            # (19481, 16)
+
+def music(X, A, n_src=1):                         # X: (M, 16) snapshots as rows
+    R = X.T @ X.conj() / X.shape[0]               # (16,16) = (1/M) sum x x^H
+    lam, E = np.linalg.eigh(R)                    # ascending
+    lam, E = lam[::-1], E[:, ::-1]
+    En = E[:, n_src:]                             # noise subspace (16, 15)
+    P = 1.0/np.sum(np.abs(np.conj(A) @ En)**2, axis=1)   # rows a^H En  (conj!)
+    P = P.reshape(AZm.shape); i = np.unravel_index(P.argmax(), P.shape)
+    return AZm[i], ELm[i], P, lam
+\end{lstlisting}
+
+\section{Summary}
+\begin{itemize}
+  \item The steering vector (\ref{eq:steer}) is the ideal phase pattern for a candidate direction; MUSIC (\ref{eq:music}) finds the direction whose pattern is orthogonal to the noise subspace of the measured covariance (\ref{eq:cov}).
+  \item The sign convention $(s_y, s_z) = (-1, -1)$ is measured with the four-way test on reference tags, never assumed; the same test catches the conjugation mistakes that produce mirrored peaks.
+  \item With ideal geometry and no calibration, uncalibrated MUSIC places every point in the correct region: AZ MAE $2.1^\circ$, EL MAE $6.8^\circ$, window-to-window scatter $0.5^\circ$.
+  \item The errors are systematic, not random: a row-dependent elevation bias consistent with a floor/ceiling image, and two points (pt18, pt42) where a second arrival of comparable strength mirrors the elevation. Those are the targets of the calibration and multipath steps that follow.
+\end{itemize}
+
+\end{document}
