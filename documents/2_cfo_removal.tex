@@ -1,0 +1,233 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{siunitx}
+\usepackage{booktabs}
+\usepackage{listings,xcolor}
+\usepackage[hidelinks]{hyperref}
+\setlength{\parskip}{4pt}
+\lstset{language=Python,basicstyle=\ttfamily\small,keywordstyle=\color{blue!70!black},
+        commentstyle=\color{gray},showstringspaces=false,frame=single,breaklines=true}
+
+\title{Step 2: Removing the CFO from the switched I/Q samples\\[4pt]\large BLE 5.1 CTE on the Silicon Labs BRD4185A 4$\times$4 array}
+\author{BLE AoA notes --- continuation of \emph{From the Received RF Signal to I/Q Samples}}
+\date{September 2026}
+
+\begin{document}
+\maketitle
+
+\section{Where we are}
+Step~1 measured, for every packet, the frequency offset $\Delta f$ between the received CTE tone and the receiver's local oscillator, using the eight reference samples IQ1--IQ8 that are all taken on antenna~1. The result is a unit phasor
+\[
+  \rho = e^{\,j\,2\pi\,\Delta f\,T_s},\qquad T_s = \SI{1}{\micro s},
+\]
+whose angle is the phase the tone advances in one microsecond ($-74.18^\circ$ for the packet used as the example). This step uses $\rho$ to strip that rotation out of the remaining 74 samples, IQ9--IQ82, which were taken while the receiver was switching through the sixteen antennas.
+
+\section{The timing of the 82 samples}
+The EFR32 records 82 I/Q pairs per CTE. The first eight are spaced \SI{1}{\micro s} apart and are all on ANT1. From IQ9 onward the receiver switches antenna every \SI{2}{\micro s} and takes one sample per antenna. The absolute time of sample $k$ from the start of the CTE is therefore
+\[
+  t_k =
+  \begin{cases}
+    (k-1)\,T_s, & 1\le k\le 8, \\[2pt]
+    8\,T_s + 2\,(k-9)\,T_s, & 9\le k\le 82.
+  \end{cases}
+\]
+The antenna connected at sample $k$ follows the switching pattern the firmware was programmed with. On this board the pattern starts at ANT2 immediately after the reference period and cycles ANT1$\to$ANT16 repeatedly:
+\[
+  \mathrm{ant}(k) =
+  \begin{cases}
+    1, & k\le 8,\\
+    k-7, & 9\le k\le 23 \quad(\text{ANT2}\dots\text{ANT16}),\\
+    \big((k-24)\bmod 16\big)+1, & k\ge 24.
+  \end{cases}
+\]
+This gives five sweeps through the array, three of which are complete:
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+Samples & Time span & Antennas & Use \\
+\midrule
+IQ1--8   & 0--\SI{7}{\micro s}    & ANT1 only        & reference period (Step 1) \\
+IQ9--23  & 8--\SI{36}{\micro s}   & ANT2 \dots ANT16 & group 1, incomplete \\
+IQ24--39 & 38--\SI{68}{\micro s}  & ANT1 \dots ANT16 & \textbf{group 2} \\
+IQ40--55 & 70--\SI{100}{\micro s} & ANT1 \dots ANT16 & \textbf{group 3} \\
+IQ56--71 & 102--\SI{132}{\micro s}& ANT1 \dots ANT16 & \textbf{group 4} \\
+IQ72--82 & 134--\SI{154}{\micro s}& ANT1 \dots ANT11 & group 5, incomplete \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{What a switched sample contains}
+From Step~1, the baseband sample on antenna $n$ at time $t$ is
+\[
+  z_n(t) = A_n\, e^{\,j\left(2\pi\,\Delta f\, t + \phi_0 + \psi_n\right)} .
+\]
+Three things appear in the phase:
+\begin{itemize}
+  \item $2\pi\,\Delta f\,t$ --- the rotation caused by the frequency offset. It depends only on \emph{when} the sample was taken.
+  \item $\phi_0$ --- a constant, the same for every antenna in the packet. It carries no angle information and will be removed later by referencing every antenna to ANT1.
+  \item $\psi_n$ --- the \textbf{spatial phase} of antenna $n$: the extra path length the wave travels to reach that antenna compared with the array centre. This is the quantity that encodes the direction of arrival, and it is what MUSIC needs.
+\end{itemize}
+Since each antenna is visited at a different time, the term $2\pi\,\Delta f\,t_k$ is different for every antenna. Between two consecutive switched samples ($\Delta t = \SI{2}{\micro s}$) it changes by
+\[
+  2\pi\,\Delta f\cdot 2T_s = 2\angle\rho \approx 2\times(-74.18^\circ) = -148.4^\circ .
+\]
+The spatial term $\psi_m - \psi_n$ between neighbouring antennas is at most $\pm 2\pi (d/\lambda) \approx \pm115^\circ$, and typically much less. The time term is larger than the signal we want. Without correction the measured phase pattern across the array is a time ramp, not a spatial one.
+
+\section{The correction}
+Because $\rho$ is the rotation per microsecond, the rotation accumulated by time $t_k$ is $\rho^{\,t_k/T_s}$. Multiplying by its conjugate undoes it:
+\[
+  \boxed{\;\tilde z_k = z_k\cdot \bar\rho^{\;t_k/T_s}\;}
+  \qquad\Longrightarrow\qquad
+  \tilde z_k = A_{\mathrm{ant}(k)}\, e^{\,j\left(\phi_0 + \psi_{\mathrm{ant}(k)}\right)} .
+\]
+Every sample is rotated back to what it would have been at $t = 0$. The exponent $t_k/T_s$ is an integer (0\dots7 for the reference period, then 8, 10, 12, \dots, 154), so this is just repeated multiplication by $\bar\rho$; because $|\rho| = 1$ the amplitudes are untouched.
+
+After correction, samples of the \emph{same} antenna taken at \emph{different} times should have the same phase. That is the test used in \S\ref{sec:check}.
+
+\subsection*{Why $\rho$ cannot be estimated from the switched samples themselves}
+The switched samples are \SI{2}{\micro s} apart, so a phase step measured between them is only known modulo $360^\circ$ per \SI{2}{\micro s}, i.e.\ the frequency is only known modulo \SI{500}{kHz} and the unambiguous range is $\pm\SI{250}{kHz}$. The true offset, $\approx -\SI{206}{kHz}$ with per-tag spread of $\pm\SI{15}{kHz}$, sits close to that edge and would be aliased for some tags. The reference period's \SI{1}{\micro s} spacing gives $\pm\SI{500}{kHz}$, which is safe. In addition, consecutive switched samples are on different antennas, so their phase step contains $\psi_m - \psi_n$ as well as the frequency term and the two cannot be separated.
+
+\section{Worked example (Dataset19, set1, packet 0)}
+Same packet as Step~1: tag \texttt{84:2e:14:31:ba:9e} at grid point 46, channel 24, $\angle\rho = -74.18^\circ$.
+
+\begin{center}
+\begin{tabular}{lcrrrrr}
+\toprule
+group & $k$ & ant & $t_k$ (\si{\micro s}) & $\angle z_k$ raw & $\angle\tilde z_k$ corrected & $|z_k|$ \\
+\midrule
+G1 & 9  & 2 & 8   & $124.0^\circ$  & $-2.6^\circ$  & 55.5 \\
+G1 & 10 & 3 & 10  & $-33.0^\circ$  & $-11.2^\circ$ & 88.2 \\
+G1 & 11 & 4 & 12  & $-170.3^\circ$ & $-0.1^\circ$  & 77.1 \\
+\midrule
+G2 & 24 & 1 & 38  & $109.9^\circ$  & $48.7^\circ$  & 114.8 \\
+G2 & 25 & 2 & 40  & $-85.5^\circ$  & $1.7^\circ$   & 51.2 \\
+G2 & 26 & 3 & 42  & $110.8^\circ$  & $-13.6^\circ$ & 84.5 \\
+G2 & 27 & 4 & 44  & $-30.0^\circ$  & $-6.1^\circ$  & 73.9 \\
+\midrule
+G3 & 40 & 1 & 70  & $-108.9^\circ$ & $43.7^\circ$  & 114.2 \\
+G3 & 41 & 2 & 72  & $52.9^\circ$   & $-6.1^\circ$  & 51.4 \\
+G3 & 42 & 3 & 74  & $-110.3^\circ$ & $-21.0^\circ$ & 86.4 \\
+G3 & 43 & 4 & 76  & $110.4^\circ$  & $-11.9^\circ$ & 74.7 \\
+\midrule
+G4 & 56 & 1 & 102 & $30.4^\circ$   & $36.7^\circ$  & 114.7 \\
+G4 & 57 & 2 & 104 & $-164.6^\circ$ & $-9.9^\circ$  & 52.9 \\
+G4 & 58 & 3 & 106 & $30.4^\circ$   & $-26.5^\circ$ & 87.0 \\
+G4 & 59 & 4 & 108 & $-109.9^\circ$ & $-18.4^\circ$ & 76.6 \\
+\midrule
+G5 & 72 & 1 & 134 & $170.9^\circ$  & $31.1^\circ$  & 114.4 \\
+G5 & 73 & 2 & 136 & $-26.1^\circ$  & $-17.6^\circ$ & 52.3 \\
+G5 & 74 & 3 & 138 & $169.3^\circ$  & $-33.8^\circ$ & 86.5 \\
+G5 & 75 & 4 & 140 & $31.0^\circ$   & $-23.8^\circ$ & 75.8 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Read the table row by row:
+\begin{itemize}
+  \item Raw phases jump wildly between consecutive samples (IQ24$\to$IQ25: $+164.6^\circ$, which is $-148.4^\circ$ of time rotation plus $-47^\circ$ of spatial phase, wrapped). After correction the same step is $-47.0^\circ$ --- the spatial phase difference between ANT1 and ANT2 alone.
+  \item Read down any one antenna. ANT2 is sampled five times, at IQ9, 25, 41, 57, 73: raw phases $124.0^\circ, -85.5^\circ, 52.9^\circ, -164.6^\circ, -26.1^\circ$ (no pattern); corrected $-2.6^\circ, 1.7^\circ, -6.1^\circ, -9.9^\circ, -17.6^\circ$. The correction has made the same antenna read (nearly) the same phase whenever it is sampled. ANT3 and ANT4 behave the same way.
+  \item Read across any one group. The pattern ANT1$\to$ANT4 after correction is the same in G2, G3, G4 and G5 up to a common offset: $(48.7, 1.7, -13.6, -6.1)$, $(43.7, -6.1, -21.0, -11.9)$, $(36.7, -9.9, -26.5, -18.4)$, $(31.1, -17.6, -33.8, -23.8)$. The offset that changes from group to group is the residual ramp discussed in \S\ref{sec:check}; the shape within a group is the spatial phase.
+  \item Amplitudes are unchanged, as they must be, and each antenna keeps its own level (ANT1 $\approx 114$, ANT2 $\approx 52$, ANT3 $\approx 86$, ANT4 $\approx 75$) across all five sweeps.
+\end{itemize}
+
+\section{Checking the correction: the repeated-antenna test}\label{sec:check}
+ANT1 is sampled at IQ24, IQ40, IQ56 and IQ72, exactly \SI{32}{\micro s} apart. After a perfect correction the four phases would be identical. Measured: $48.7^\circ$, $43.7^\circ$, $36.7^\circ$, $31.1^\circ$ --- a steady drift of about $-6^\circ$ per \SI{32}{\micro s}. A phase drift of $\delta\phi$ over $\Delta t$ corresponds to a frequency error
+\[
+  \delta f = \frac{\delta\phi}{360^\circ\,\Delta t} = \frac{-6^\circ}{360^\circ\times\SI{32}{\micro s}} \approx -\SI{0.5}{kHz} .
+\]
+So $\rho$ estimated from the reference period was off by roughly \SI{0.5}{kHz}. That is consistent with the packet-to-packet scatter of the CFO seen in Step~1 (about \SI{0.6}{kHz} standard deviation within one tag and channel): the eight-sample estimate is good, but not perfect, and its noise shows up as a slow residual ramp across the CTE.
+
+Two remarks follow.
+\begin{enumerate}
+  \item The residual ramp is \emph{common to all antennas} within a group (it depends on time, and the sixteen antennas of one group are sampled within \SI{30}{\micro s}, the time gap between the ANT1 sample and the ANT16 sample: 16 samples, hence 15 steps of \SI{2}{\micro s}; the sixteen slots themselves occupy \SI{32}{\micro s}, which is why successive ANT1 visits are \SI{32}{\micro s} apart). When each antenna is later referenced to ANT1 of the same group, most of it cancels: across the three complete groups of this packet the per-antenna phases agree to within $2$--$3^\circ$ after that normalisation. This is why groups 2, 3, 4 are treated as three separate snapshots rather than one 48-sample block.
+  \item The scatter can be reduced further by \emph{smoothing} $\rho$ over neighbouring packets of the same tag, since the true offset changes only slowly (temperature). Replacing each packet's $\angle\rho$ by the median over a sliding window of packets from the same tag removes about 90\,\% of the per-packet scatter with no loss of packets. Whether this is needed depends on how much residual the downstream estimator tolerates; it is an optional refinement, not part of the basic step.
+\end{enumerate}
+
+\section{From corrected samples to array snapshots}
+With the time dependence removed, one complete sweep gives sixteen complex numbers $\tilde z_{k_1},\dots,\tilde z_{k_{16}}$, one per antenna. Two small operations turn them into the vector MUSIC expects:
+\begin{enumerate}
+  \item \textbf{Order by antenna.} Use $\mathrm{ant}(k)$ to place each sample into position $n = 1\dots16$ of a vector $\mathbf x$.
+  \item \textbf{Reference to ANT1.} Multiply by the conjugate of the ANT1 sample of the same group, normalised: $x_n \leftarrow x_n\,\bar x_1 / |x_1|$. This removes $\phi_0$ (and most of the residual ramp of \S\ref{sec:check}), leaving $x_n = A_n\, e^{\,j(\psi_n - \psi_1)}$.
+\end{enumerate}
+For the example packet the three complete groups give:
+
+\begin{center}
+\begin{tabular}{crrrrrrr}
+\toprule
+ & \multicolumn{3}{c}{phase relative to ANT1} & & \multicolumn{3}{c}{amplitude} \\
+\cmidrule{2-4}\cmidrule{6-8}
+ant & G2 & G3 & G4 & spread & G2 & G3 & G4 \\
+\midrule
+1  & $0^\circ$    & $0^\circ$    & $0^\circ$    & --          & 115 & 114 & 114 \\
+2  & $-47^\circ$  & $-50^\circ$  & $-47^\circ$  & $3^\circ$   & 51  & 51  & 53 \\
+3  & $-62^\circ$  & $-65^\circ$  & $-63^\circ$  & $3^\circ$   & 84  & 86  & 86 \\
+4  & $-55^\circ$  & $-56^\circ$  & $-55^\circ$  & $1^\circ$   & 74  & 74  & 76 \\
+5  & $12^\circ$   & $8^\circ$    & $8^\circ$    & $4^\circ$   & 51  & 50  & 50 \\
+6  & $-51^\circ$  & $-50^\circ$  & $-51^\circ$  & $1^\circ$   & 48  & 51  & 51 \\
+7  & $-46^\circ$  & $-46^\circ$  & $-47^\circ$  & $1^\circ$   & 47  & 47  & 47 \\
+8  & $-151^\circ$ & $-148^\circ$ & $-152^\circ$ & $4^\circ$   & 13  & 12  & 12 \\
+9  & $90^\circ$   & $89^\circ$   & $91^\circ$   & $2^\circ$   & 41  & 40  & 41 \\
+10 & $-23^\circ$  & $-26^\circ$  & $-17^\circ$  & $9^\circ$   & 24  & 25  & 24 \\
+11 & $-7^\circ$   & $-8^\circ$   & $-7^\circ$   & $1^\circ$   & 43  & 45  & 46 \\
+12 & $-150^\circ$ & $-149^\circ$ & $-146^\circ$ & $4^\circ$   & 24  & 25  & 23 \\
+13 & $13^\circ$   & $9^\circ$    & $11^\circ$   & $4^\circ$   & 45  & 46  & 47 \\
+14 & $-25^\circ$  & $-27^\circ$  & $-25^\circ$  & $2^\circ$   & 42  & 43  & 44 \\
+15 & $-76^\circ$  & $-75^\circ$  & $-75^\circ$  & $1^\circ$   & 37  & 35  & 35 \\
+16 & $-100^\circ$ & $-104^\circ$ & $-101^\circ$ & $4^\circ$   & 84  & 84  & 83 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Three points to take from the table. First, after referencing to ANT1 the group-to-group offset of \S\ref{sec:check} is gone: the three columns agree to within $1$--$4^\circ$ on almost every antenna, which is the repeatability of a single packet. Second, the two weakest antennas, ANT8 and ANT10 with amplitudes $12$ and $24$, show the largest spreads ($4^\circ$ and $9^\circ$); phase noise scales inversely with amplitude, so low-amplitude elements will be the noisiest inputs to MUSIC. Third, the amplitudes are far from uniform ($12$ to $115$), a property of this array's feed network that the later calibration step has to account for. Each packet therefore yields three snapshots; a window of $N$ packets yields $3N$ snapshots, from which the covariance matrix and the MUSIC spectrum are built in Step~3. (A caution for that step: the covariance needs more snapshots than antennas, $3N > 16$, and the window must be short enough that the tag has not moved.)
+
+\section{Reference code}
+\begin{lstlisting}
+import numpy as np
+
+T_S = 1e-6
+
+def slot_time_us(k):            # k = 1..82
+    return (k-1)*1.0 if k <= 8 else 8.0 + 2.0*(k-9)
+
+def slot_ant(k):
+    if k <= 8:  return 1
+    if k <= 23: return k - 7
+    return (k-24) % 16 + 1
+
+GROUPS = {'G2': range(24, 40), 'G3': range(40, 56), 'G4': range(56, 72)}
+
+def cfo_rho(z):                 # z: complex array of the 82 samples
+    p = np.conj(z[:7]) * z[1:8]
+    return np.mean(p / np.abs(p))
+
+def cfo_remove(z, rho):
+    t = np.array([slot_time_us(k) for k in range(1, 83)])
+    return z * np.conj(rho) ** t          # t is in units of T_s = 1 us
+
+def snapshots(z_corr):
+    out = {}
+    for g, ks in GROUPS.items():
+        x = np.empty(16, complex)
+        for k in ks:
+            x[slot_ant(k) - 1] = z_corr[k - 1]
+        out[g] = x * np.conj(x[0]) / abs(x[0])   # reference to ANT1
+    return out
+
+# per packet:
+#   z    = i + 1j*q  for IQ1..IQ82
+#   rho  = cfo_rho(z)
+#   zc   = cfo_remove(z, rho)
+#   snap = snapshots(zc)      # three 16-element vectors
+\end{lstlisting}
+
+\section{Summary}
+\begin{itemize}
+  \item Every switched sample carries a phase $2\pi\,\Delta f\,t_k$ that depends on its sampling time; at \SI{2}{\micro s} per antenna this is $\approx -148^\circ$ per switch, larger than the spatial phase.
+  \item Multiplying sample $k$ by $\bar\rho^{\,t_k/T_s}$ removes it. Amplitudes are unaffected.
+  \item The correction is verified by the repeated-antenna test: ANT1 at IQ24/40/56 should agree. The residual ($\approx 6^\circ$ per \SI{32}{\micro s} in the example) measures the error of the reference-period estimate ($\approx\SI{0.5}{kHz}$) and is mostly common-mode within a group.
+  \item Groups 2, 3, 4 each give a 16-element snapshot after ordering by antenna and referencing to ANT1; these feed the covariance and MUSIC in the next step.
+\end{itemize}
+
+\end{document}
